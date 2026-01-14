@@ -1,0 +1,6 @@
+# Smart Contract Build Artifacts
+build/
+plutus.json
+
+# Aiken cache
+.aiken/

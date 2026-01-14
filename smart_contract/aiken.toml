@@ -1,0 +1,16 @@
+name = "pycardano_course/cip68_dynamic_asset"
+version = "0.0.1"
+compiler = "v1.1.19"
+plutus = "v3"
+license = "MIT"
+description = "CIP-68 Dynamic Asset Smart Contract for PyCardano Course"
+
+[repository]
+user = "pycardano_course"
+project = "cip68_dynamic_asset"
+platform = "github"
+
+[[dependencies]]
+name = "aiken-lang/stdlib"
+version = "v2.2.0"
+source = "github"
