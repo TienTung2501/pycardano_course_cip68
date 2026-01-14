@@ -387,7 +387,12 @@ async def create_mint_transaction(request: MintRequest):
         user_multi[policy_id] = user_asset_only
         user_value = Value(2_000_000, user_multi)
         
-        # Build transaction
+        # Build transaction with fresh protocol parameters
+        # Force refresh to avoid PPViewHashesDontMatch errors
+        try:
+            chain_context._protocol_param = chain_context._api.epoch_latest_parameters()
+        except:
+            pass  # Fallback to cached if fetch fails
         builder = TransactionBuilder(chain_context)
         builder.add_input_address(owner_address)
         
@@ -494,7 +499,12 @@ async def create_update_transaction(request: UpdateRequest):
         # Create redeemer
         redeemer = Redeemer(UpdateMetadata())
         
-        # Build transaction
+        # Build transaction with fresh protocol parameters
+        # Force refresh to avoid PPViewHashesDontMatch errors on subsequent updates
+        try:
+            chain_context._protocol_param = chain_context._api.epoch_latest_parameters()
+        except:
+            pass  # Fallback to cached if fetch fails
         builder = TransactionBuilder(chain_context)
         builder.add_input_address(owner_address)
         
@@ -609,7 +619,12 @@ async def create_burn_transaction(request: BurnRequest):
         mint_redeemer = Redeemer(BurnToken(token_name=token_name_bytes))
         spend_redeemer = Redeemer(BurnReference())
         
-        # Build transaction
+        # Build transaction with fresh protocol parameters
+        # Force refresh to avoid PPViewHashesDontMatch errors
+        try:
+            chain_context._protocol_param = chain_context._api.epoch_latest_parameters()
+        except:
+            pass  # Fallback to cached if fetch fails
         builder = TransactionBuilder(chain_context)
         builder.add_input_address(owner_address)
         
@@ -686,9 +701,6 @@ async def submit_transaction(request: SubmitRequest):
             redeemer=backend_ws.redeemer,
         )
         
-        # Convert to latest spec for proper serialization
-        merged_ws.convert_to_latest_spec()
-        
         # Create final transaction
         final_tx = Transaction(
             transaction_body=backend_tx.transaction_body,
@@ -698,7 +710,7 @@ async def submit_transaction(request: SubmitRequest):
         )
         
         # Submit to blockchain
-        tx_hash = chain_context.submit_tx_cbor(final_tx.to_cbor())
+        tx_hash = chain_context.submit_tx(final_tx)
         
         return SubmitResponse(
             success=True,
@@ -709,9 +721,18 @@ async def submit_transaction(request: SubmitRequest):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        
+        error_msg = str(e)
+        # Check if it's a PPViewHashesDontMatch error
+        if "PPViewHashesDontMatch" in error_msg:
+            return SubmitResponse(
+                success=False,
+                message="Protocol parameters changed. Please refresh and try again."
+            )
+        
         return SubmitResponse(
             success=False,
-            message=f"Error submitting transaction: {str(e)}"
+            message=f"Error submitting transaction: {error_msg}"
         )
 
 
