@@ -16,7 +16,7 @@ interface WalletContextType {
   connect: (walletId: keyof CardanoWindow) => Promise<void>;
   disconnect: () => void;
   getAvailableWallets: () => WalletInfo[];
-  signTx: (txCbor: string) => Promise<string>;
+  signTx: (txCbor: string, partialSign?: boolean) => Promise<string>;
 }
 
 const WalletContext = createContext<WalletContextType | null>(null);
@@ -117,14 +117,14 @@ export function WalletProvider({ children }: WalletProviderProps) {
   }, []);
 
   // Sign transaction (returns witness set CBOR)
-  const signTx = useCallback(async (txCbor: string): Promise<string> => {
+  const signTx = useCallback(async (txCbor: string, partialSign: boolean = false): Promise<string> => {
     if (!walletApi) {
       throw new Error('Wallet not connected');
     }
 
     try {
       // Sign with partialSign: true - returns witness set only
-      const witnessSetCbor = await walletApi.signTx(txCbor, true);
+      const witnessSetCbor = await walletApi.signTx(txCbor, partialSign);
       return witnessSetCbor;
     } catch (err: any) {
       console.error('Transaction signing failed:', err);

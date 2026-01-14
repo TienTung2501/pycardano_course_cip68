@@ -67,7 +67,7 @@ export default function BurnModal({
       setTxStatus({ status: 'signing', message: 'Vui lòng ký transaction trong ví...' });
 
       // 2. Sign transaction with wallet
-      const witnessSet = await signTx(data.tx_cbor);
+      const witnessSet = await signTx(data.tx_cbor,true);
 
       setTxStatus({ status: 'submitting', message: 'Đang gửi transaction...' });
 

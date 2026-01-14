@@ -387,12 +387,7 @@ async def create_mint_transaction(request: MintRequest):
         user_multi[policy_id] = user_asset_only
         user_value = Value(2_000_000, user_multi)
         
-        # Build transaction with fresh protocol parameters
-        # Force refresh to avoid PPViewHashesDontMatch errors
-        try:
-            chain_context._protocol_param = chain_context._api.epoch_latest_parameters()
-        except:
-            pass  # Fallback to cached if fetch fails
+        # Build transaction
         builder = TransactionBuilder(chain_context)
         builder.add_input_address(owner_address)
         
@@ -499,12 +494,7 @@ async def create_update_transaction(request: UpdateRequest):
         # Create redeemer
         redeemer = Redeemer(UpdateMetadata())
         
-        # Build transaction with fresh protocol parameters
-        # Force refresh to avoid PPViewHashesDontMatch errors on subsequent updates
-        try:
-            chain_context._protocol_param = chain_context._api.epoch_latest_parameters()
-        except:
-            pass  # Fallback to cached if fetch fails
+        # Build transaction
         builder = TransactionBuilder(chain_context)
         builder.add_input_address(owner_address)
         
@@ -619,12 +609,7 @@ async def create_burn_transaction(request: BurnRequest):
         mint_redeemer = Redeemer(BurnToken(token_name=token_name_bytes))
         spend_redeemer = Redeemer(BurnReference())
         
-        # Build transaction with fresh protocol parameters
-        # Force refresh to avoid PPViewHashesDontMatch errors
-        try:
-            chain_context._protocol_param = chain_context._api.epoch_latest_parameters()
-        except:
-            pass  # Fallback to cached if fetch fails
+        # Build transaction
         builder = TransactionBuilder(chain_context)
         builder.add_input_address(owner_address)
         
@@ -680,37 +665,35 @@ async def submit_transaction(request: SubmitRequest):
     Merge witnesses using proper PyCardano types with NonEmptyOrderedSet.
     """
     try:
-        # Parse backend transaction
+       # 1. Load lại Transaction gốc từ CBOR (chứa Body + Scripts/Redeemers do Backend tạo)
+        # Lưu ý: backend_tx này chưa có chữ ký ví (vkey_witnesses)
         backend_tx = Transaction.from_cbor(bytes.fromhex(request.tx_cbor))
         
-        # Parse wallet witness set
+        # 2. Parse Witness Set từ Frontend (Chỉ chứa vkey_witnesses - chữ ký ví)
         wallet_witness = TransactionWitnessSet.from_cbor(bytes.fromhex(request.witness_set_cbor))
-        wallet_vkeys = wallet_witness.vkey_witnesses
         
-        # Get backend witness set
-        backend_ws = backend_tx.transaction_witness_set
+        # 3. Hợp nhất (Merge) an toàn
+        # Lấy witness set hiện tại của backend (đang chứa scripts, redeemers)
+        final_witness_set = backend_tx.transaction_witness_set
         
-        # Create merged witness set with proper types
-        merged_ws = TransactionWitnessSet(
-            vkey_witnesses=NonEmptyOrderedSet(list(wallet_vkeys)) if wallet_vkeys else None,
-            native_scripts=backend_ws.native_scripts,
-            plutus_v1_script=backend_ws.plutus_v1_script,
-            plutus_v2_script=backend_ws.plutus_v2_script,
-            plutus_v3_script=backend_ws.plutus_v3_script,
-            plutus_data=backend_ws.plutus_data,
-            redeemer=backend_ws.redeemer,
-        )
+        # Nếu ví có trả về chữ ký (vkey), hãy thêm nó vào
+        if wallet_witness.vkey_witnesses:
+            if final_witness_set.vkey_witnesses:
+                # Nếu backend cũng đã ký gì đó (ít gặp), thì nối thêm vào
+                # Lưu ý: PyCardano dùng NonEmptyOrderedSet cho vkey_witnesses
+                existing_vkeys = list(final_witness_set.vkey_witnesses)
+                new_vkeys = list(wallet_witness.vkey_witnesses)
+                final_witness_set.vkey_witnesses = NonEmptyOrderedSet(existing_vkeys + new_vkeys)
+            else:
+                # Trường hợp phổ biến: Backend chưa có vkey nào, gán luôn của ví vào
+                final_witness_set.vkey_witnesses = wallet_witness.vkey_witnesses
+
+        # 4. Gán ngược lại vào Transaction
+        backend_tx.transaction_witness_set = final_witness_set
         
-        # Create final transaction
-        final_tx = Transaction(
-            transaction_body=backend_tx.transaction_body,
-            transaction_witness_set=merged_ws,
-            valid=True,
-            auxiliary_data=backend_tx.auxiliary_data
-        )
-        
-        # Submit to blockchain
-        tx_hash = chain_context.submit_tx(final_tx)
+        # 5. Submit
+        # Quan trọng: Dùng backend_tx.to_cbor() để đảm bảo cấu trúc Body giữ nguyên
+        tx_hash = chain_context.submit_tx_cbor(backend_tx.to_cbor())
         
         return SubmitResponse(
             success=True,
@@ -721,18 +704,9 @@ async def submit_transaction(request: SubmitRequest):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        
-        error_msg = str(e)
-        # Check if it's a PPViewHashesDontMatch error
-        if "PPViewHashesDontMatch" in error_msg:
-            return SubmitResponse(
-                success=False,
-                message="Protocol parameters changed. Please refresh and try again."
-            )
-        
         return SubmitResponse(
             success=False,
-            message=f"Error submitting transaction: {error_msg}"
+            message=f"Error submitting transaction: {str(e)}"
         )
 
 

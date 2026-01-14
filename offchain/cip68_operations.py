@@ -583,59 +583,101 @@ def get_cip68_metadata(
 
 def list_all_tokens(
     context: BlockFrostChainContext,
-    owner_address: Address = None,
+    user_address_str: str
 ) -> List[Dict[str, Any]]:
     """
-    List all CIP-68 tokens, optionally filtered by owner.
-    
-    Args:
-        context: BlockFrost chain context
-        owner_address: Filter by owner address (optional)
-        
-    Returns:
-        List of token info dicts
+    Lấy danh sách CIP-68 NFT từ ví người dùng và gộp với metadata từ Script.
     """
+    
+    # 1. Setup thông tin cần thiết
     network = get_network()
-    policy_id = get_fixed_policy_id()
+    policy_id = get_fixed_policy_id() # Policy ID cố định của dự án
     store_address = get_fixed_store_address(network)
     
-    tokens = []
-    utxos = context.utxos(store_address)
+    # Prefix bytes
+    # (222) User Token
+    user_token_prefix = bytes.fromhex("000de140") 
+    # (100) Reference Token
+    ref_token_prefix = bytes.fromhex("000643b0")  
+
+    user_tokens_list = []
     
-    for utxo in utxos:
+    # ========================================================
+    # BƯỚC 1: QUÉT VÍ USER (Source of Truth cho quyền sở hữu)
+    # ========================================================
+    try:
+        user_utxos = context.utxos(user_address_str)
+    except:
+        return [] # Ví mới chưa có UTxO
+
+    # Danh sách các token names (dạng hex không có prefix) mà user đang giữ
+    holding_token_names = set()
+
+    for utxo in user_utxos:
+        if utxo.output.amount.multi_asset:
+            for pid, assets in utxo.output.amount.multi_asset.items():
+                # Chỉ quan tâm token thuộc Policy ID của dự án này
+                if pid == policy_id:
+                    for asset_name, quantity in assets.items():
+                        # Kiểm tra xem có phải User Token (prefix 222) không
+                        payload = asset_name.payload
+                        if payload.startswith(user_token_prefix) and quantity > 0:
+                            # Cắt bỏ prefix (222) để lấy tên gốc
+                            # Ví dụ: 000de140 + "test" -> "test"
+                            real_name_bytes = payload[len(user_token_prefix):]
+                            holding_token_names.add(real_name_bytes)
+
+    if not holding_token_names:
+        return [] # User không có token nào của dự án này
+
+    # ========================================================
+    # BƯỚC 2: TRA CỨU METADATA TỪ STORE SCRIPT
+    # ========================================================
+    # Để tối ưu, ta chỉ tìm những Reference Token tương ứng với holding_token_names
+    # Lưu ý: PyCardano context.utxos() lấy hết, ta sẽ filter ở client side.
+    # (Nếu dùng Raw Blockfrost API thì có thể query specific asset, nhưng ở đây dùng context cho đồng bộ)
+    
+    store_utxos = context.utxos(store_address)
+    
+    for utxo in store_utxos:
         if utxo.output.amount.multi_asset:
             for pid, assets in utxo.output.amount.multi_asset.items():
                 if pid == policy_id:
                     for asset_name in assets.keys():
-                        # Check if it's a reference token
-                        if asset_name.payload.startswith(CIP68_REFERENCE_PREFIX):
-                            token_name = asset_name.payload[4:].decode('utf-8')
-                            datum = utxo.output.datum
+                        payload = asset_name.payload
+                        
+                        # Kiểm tra xem đây có phải là Reference Token (100) không
+                        if payload.startswith(ref_token_prefix):
+                            # Lấy tên gốc
+                            real_name_bytes = payload[len(ref_token_prefix):]
                             
-                            token_info = {
-                                'token_name': token_name,
-                                'policy_id': FIXED_POLICY_ID,
-                                'ref_asset_name': asset_name.payload.hex(),
-                            }
-                            
-                            if isinstance(datum, CIP68Datum):
-                                token_info['owner'] = datum.owner.hex()
-                                token_info['version'] = datum.version
-                                # Lấy thêm thông tin từ datum
-                                if datum.policy_id:
-                                    token_info['datum_policy_id'] = datum.policy_id.hex()
-                                if datum.asset_name:
-                                    token_info['datum_asset_name'] = datum.asset_name.decode('utf-8')
+                            # QUAN TRỌNG: Chỉ lấy nếu User đang giữ User Token tương ứng
+                            if real_name_bytes in holding_token_names:
                                 
-                                # Filter by owner if specified
-                                if owner_address:
-                                    owner_pkh = bytes(owner_address.payment_part)
-                                    if datum.owner != owner_pkh:
-                                        continue
-                            
-                            tokens.append(token_info)
-    
-    return tokens
+                                # Parse Metadata từ Datum
+                                datum = utxo.output.datum
+                                token_data = {
+                                    "token_name": real_name_bytes.decode("utf-8"),
+                                    "policy_id": str(policy_id),
+                                    "amount": 1, # NFT thì luôn là 1
+                                    "metadata": {}
+                                }
+                                
+                                if isinstance(datum, CIP68Datum):
+                                    # Convert bytes metadata sang string cho đẹp
+                                    meta_dict = {}
+                                    for k, v in datum.metadata.items():
+                                        key = k.decode("utf-8") if isinstance(k, bytes) else str(k)
+                                        val = v.decode("utf-8") if isinstance(v, bytes) else str(v)
+                                        meta_dict[key] = val
+                                        
+                                    token_data["metadata"] = meta_dict
+                                    token_data["version"] = datum.version
+                                    token_data["owner_in_datum"] = datum.owner.hex() # Để tham khảo
+                                
+                                user_tokens_list.append(token_data)
+
+    return user_tokens_list
 
 
 if __name__ == "__main__":

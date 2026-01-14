@@ -48,7 +48,7 @@ export default function MintForm({ walletAddress, setTxStatus, scriptInfo, onMin
       setTxStatus({ status: 'signing', message: 'Vui lòng ký transaction trong ví...' });
 
       // 2. Sign transaction with wallet (returns witness set)
-      const witnessSet = await signTx(data.tx_cbor);
+      const witnessSet = await signTx(data.tx_cbor,true);
 
       setTxStatus({ status: 'submitting', message: 'Đang gửi transaction...' });
 
